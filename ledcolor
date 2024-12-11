@@ -1,0 +1,116 @@
+#include <Adafruit_NeoPixel.h>
+#include <Arduino.h>
+
+#define PIN            6  // Pin pour les LED RGB
+#define NUMPIXELS      8  // Nombre de LED RGB
+#define POT1_PIN       A0 // Premier capteur rotatif (Rouge)
+#define POT2_PIN       A1 // Deuxième capteur rotatif (Vert)
+#define POT3_PIN       A2 // Troisième capteur rotatif (Bleu)
+#define BUTTON_PIN     7  // Pin pour le bouton de validation
+
+Adafruit_NeoPixel strip(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+// Variables pour les potentiomètres
+int potValue1 = 0;  // Valeur du premier capteur rotatif (Rouge)
+int potValue2 = 0;  // Valeur du deuxième capteur rotatif (Vert)
+int potValue3 = 0;  // Valeur du troisième capteur rotatif (Bleu)
+
+int previousPotValue1 = 0;
+int previousPotValue2 = 0;
+int previousPotValue3 = 0;
+int threshold = 10; // Seuil pour l'hystérésis
+
+// Définir les valeurs cibles pour la couleur rose
+int targetRedMin = 200; // Valeur minimale pour le rouge
+int targetRedMax = 255; // Valeur maximale pour le rouge
+int targetGreenMin = 0;  // Valeur minimale pour le vert
+int targetGreenMax = 50; // Valeur maximale pour le vert
+int targetBlueMin = 200; // Valeur minimale pour le bleu
+int targetBlueMax = 255; // Valeur maximale pour le bleu
+
+void setup() {
+  pinMode(BUTTON_PIN, INPUT);
+
+  strip.begin();
+  strip.show();  // Initialiser les LED à l'état éteint
+  
+  Serial.begin(9600);  // Pour déboguer et vérifier les valeurs des potentiomètres
+
+  delay(2000);  // Attente avant de commencer
+}
+
+void loop() {
+  // Lire les valeurs des trois capteurs rotatifs
+  int rawPotValue1 = analogRead(POT1_PIN);  // Premier capteur rotatif pour le rouge
+  int rawPotValue2 = analogRead(POT2_PIN);  // Deuxième capteur rotatif pour le vert
+  int rawPotValue3 = analogRead(POT3_PIN);  // Troisième capteur rotatif pour le bleu
+
+  // Appliquer l'hystérésis pour éviter les petites fluctuations
+  if (abs(rawPotValue1 - previousPotValue1) > threshold) {
+    previousPotValue1 = rawPotValue1;
+  } else {
+    rawPotValue1 = previousPotValue1;  // Garder la valeur précédente si la fluctuation est trop petite
+  }
+
+  if (abs(rawPotValue2 - previousPotValue2) > threshold) {
+    previousPotValue2 = rawPotValue2;
+  } else {
+    rawPotValue2 = previousPotValue2;  // Garder la valeur précédente si la fluctuation est trop petite
+  }
+
+  if (abs(rawPotValue3 - previousPotValue3) > threshold) {
+    previousPotValue3 = rawPotValue3;
+  } else {
+    rawPotValue3 = previousPotValue3;  // Garder la valeur précédente si la fluctuation est trop petite
+  }
+
+  // Mapper les valeurs des capteurs rotatifs (0-1023) vers (0-255) pour chaque couleur
+  int red = map(rawPotValue1, 0, 1023, 0, 255);   // Ajuster le rouge
+  int green = map(rawPotValue2, 0, 1023, 0, 255); // Ajuster le vert
+  int blue = map(rawPotValue3, 0, 1023, 0, 255);  // Ajuster le bleu
+
+  // Mettre à jour les LED RGB avec les nouvelles valeurs de couleur
+  for (int i = 0; i < NUMPIXELS; i++) {
+    strip.setPixelColor(i, red, green, blue);
+  }
+  strip.show();
+
+  // Affichage des valeurs sur le moniteur série pour le débogage
+  Serial.print("Potentiomètre 1 (Rouge): ");
+  Serial.print(rawPotValue1);
+  Serial.print(" -> RGB: ");
+  Serial.print(red);
+  Serial.print(", ");
+
+  Serial.print("Potentiomètre 2 (Vert): ");
+  Serial.print(rawPotValue2);
+  Serial.print(" -> RGB: ");
+  Serial.print(green);
+  Serial.print(", ");
+
+  Serial.print("Potentiomètre 3 (Bleu): ");
+  Serial.print(rawPotValue3);
+  Serial.print(" -> RGB: ");
+  Serial.print(blue);
+  Serial.println();
+
+  // Vérifier si la couleur est proche de la couleur cible (rose)
+  if (red >= targetRedMin && red <= targetRedMax &&
+      green >= targetGreenMin && green <= targetGreenMax &&
+      blue >= targetBlueMin && blue <= targetBlueMax) {
+    // Si la couleur est rose, valider le jeu
+    Serial.println("Jeu validé! Couleur rose atteinte.");
+
+    // Faire clignoter les LED en vert
+    for (int i = 0; i < 5; i++) {  // Clignoter 5 fois
+      strip.fill(strip.Color(0, 255, 0));  // LED vert
+      strip.show();
+      delay(500);  // Attendre 500 ms
+      strip.fill(strip.Color(0, 0, 0));  // LED éteinte
+      strip.show();
+      delay(500);  // Attendre 500 ms
+    }
+  }
+
+  delay(100);  // Délai pour éviter une lecture trop rapide
+}
