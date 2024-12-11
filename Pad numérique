@@ -1,0 +1,130 @@
+#include "SoftwareSerial.h"
+#include <Adafruit_NeoPixel.h>
+
+// Détection d'architecture
+#if defined(ARDUINO_ARCH_AVR)
+#define SERIAL Serial
+SoftwareSerial mySerial(2, 3);
+#define TRANS_SERIAL mySerial
+
+#elif defined(ARDUINO_ARCH_SAMD)
+#define SERIAL SerialUSB
+#define TRANS_SERIAL Serial
+
+#elif defined(ARDUINO_ARCH_RENESAS)
+#define SERIAL Serial
+SoftwareSerial mySerial(2, 3); // RX=2, TX=3
+#define TRANS_SERIAL mySerial
+
+#else
+#error "Architecture non supportée. Veuillez vérifier votre carte Arduino."
+#endif
+
+// Configuration NeoPixel
+#define NEOPIXEL_PIN 7  // Broche connectée à la LED RGB
+#define NUM_PIXELS 1    // Nombre de LEDs (1 pour une LED RGB)
+Adafruit_NeoPixel pixels(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// Code cible et état
+const String targetCode = "2003"; // Code à trouver
+String enteredCode = "";          // Stocke le code saisi
+bool isCodeValid = false;          // Indique si le code correct a été entré
+
+void setup() {
+    // Initialisation NeoPixel
+    pixels.begin();
+    pixels.show(); // Éteint la LED par défaut
+    setPixelColor(255, 165, 0); // Orange au démarrage
+
+    // Initialisation Serial et SoftwareSerial
+    TRANS_SERIAL.begin(9600); 
+    SERIAL.begin(9600);
+    SERIAL.println("Version : v1.0 - Début du débogage.");
+    SERIAL.println("Connectez le module et saisissez le code.");
+    SERIAL.println("Utilisez '*' pour réinitialiser et '#' pour valider.");
+    SERIAL.println("Le code attendu est : " + targetCode);
+}
+
+void loop() {
+    if (!isCodeValid) {
+        checkInput();  // Vérifie les entrées utilisateur uniquement si le code n'est pas encore validé
+    }
+}
+
+/*
+* data mapping: E1---1; E2---2; E3---3; E4---4; E5---5; E6---6;
+*               E7---7; E8---8; E9---9; EA---*; EB---0; EC---#;
+*/
+void checkInput() {
+    while (TRANS_SERIAL.available()) {
+        uint8_t data = TRANS_SERIAL.read();
+        char digit = mapDataToChar(data);
+
+        if (digit != '\0') {
+            SERIAL.print("Caractère reçu : ");
+            SERIAL.println(digit); // Affiche le caractère saisi dans le moniteur série
+
+            if (digit == '*') {
+                resetCode(); // Réinitialise le code si '*' est saisi
+            } else if (digit == '#') {
+                validateCode(); // Valide le code si '#' est saisi
+            } else {
+                if (enteredCode.length() < 4) {
+                    enteredCode += digit; // Ajoute le chiffre saisi au code
+                    SERIAL.println("Code actuel : " + enteredCode);
+                } else {
+                    SERIAL.println("Erreur : Le code dépasse 4 caractères. Réinitialisation nécessaire.");
+                    resetCode();
+                }
+            }
+        } else {
+            SERIAL.println("Caractère non valide ou inconnu.");
+        }
+    }
+}
+
+char mapDataToChar(uint8_t data) {
+    switch (data) {
+        case 0xE1: return '1';
+        case 0xE2: return '2';
+        case 0xE3: return '3';
+        case 0xE4: return '4';
+        case 0xE5: return '5';
+        case 0xE6: return '6';
+        case 0xE7: return '7';
+        case 0xE8: return '8';
+        case 0xE9: return '9';
+        case 0xEA: return '*';
+        case 0xEB: return '0';
+        case 0xEC: return '#';
+        default: return '\0'; // Retourne un caractère nul si non valide
+    }
+}
+
+void validateCode() {
+    SERIAL.println("Validation du code...");
+    if (enteredCode == targetCode) {
+        SERIAL.println("Code correct ! LED verte allumée.");
+        setPixelColor(0, 255, 0); // Vert
+        isCodeValid = true; // Marque le code comme validé
+    } else {
+        SERIAL.println("Code incorrect : " + enteredCode);
+        setPixelColor(255, 0, 0); // Rouge
+        delay(2000);              // Maintient la LED allumée 2 secondes
+        setPixelColor(255, 165, 0); // Retourne à la couleur orange
+    }
+    resetCode(); // Réinitialise le code après validation
+}
+
+void resetCode() {
+    enteredCode = ""; // Efface le code actuel
+    SERIAL.println("Code réinitialisé.");
+    if (!isCodeValid) {
+        setPixelColor(255, 165, 0); // Retourne à l'orange si le code n'est pas validé
+    }
+}
+
+void setPixelColor(uint8_t r, uint8_t g, uint8_t b) {
+    pixels.setPixelColor(0, pixels.Color(r, g, b)); // Définit la couleur RGB
+    pixels.show(); // Met à jour la LED
+}
