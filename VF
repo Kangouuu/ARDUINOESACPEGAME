@@ -1,0 +1,305 @@
+#include "SoftwareSerial.h"
+#include <Adafruit_NeoPixel.h>
+#include <Arduino.h>
+#include <TM1637Display.h>
+
+// Partie 1 : Détection du code numérique
+#if defined(ARDUINO_ARCH_AVR)
+#define SERIAL Serial
+SoftwareSerial mySerial(A8, A9);
+#define TRANS_SERIAL mySerial
+
+#elif defined(ARDUINO_ARCH_SAMD)
+#define SERIAL SerialUSB
+#define TRANS_SERIAL Serial
+
+#elif defined(ARDUINO_ARCH_RENESAS)
+#define SERIAL Serial
+SoftwareSerial mySerial(A8, A9); // RX=2, TX=3
+#define TRANS_SERIAL mySerial
+
+#else
+#error "Architecture non supportée. Veuillez vérifier votre carte Arduino."
+#endif
+
+// Configuration NeoPixel
+#define NEOPIXEL_PIN 8  // Broche connectée à la LED RGB
+#define NUM_PIXELS 1    // Nombre de LEDs (1 pour une LED RGB)
+Adafruit_NeoPixel pixels(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// Code cible et état
+const String targetCode = "2002"; // Code à trouver
+String enteredCode = "";          // Stocke le code saisi
+bool isCodeValid = false;         // Indique si le code correct a été entré
+
+// Partie 2 : Détection de la couleur avec les potentiomètres
+#define PIN            6  // Pin pour les LED RGB
+#define NUMPIXELS      16  // Nombre de LED RGB
+#define POT1_PIN       A0 // Premier capteur rotatif (Rouge)
+#define POT2_PIN       A2 // Deuxième capteur rotatif (Vert)
+#define POT3_PIN       A4 // Troisième capteur rotatif (Bleu)
+
+Adafruit_NeoPixel strip(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+int potValue1 = 0, potValue2 = 0, potValue3 = 0;
+int targetRedMin = 150, targetRedMax = 255;
+int targetGreenMin = 0, targetGreenMax = 100;
+int targetBlueMin = 150, targetBlueMax = 255;
+bool isColorValid = false;
+
+// Partie 3 : Gestion du minuteur
+#define CLK 12
+#define DIO 13
+#define BUTTON_PIN 17
+#define BUZZER_PIN 19
+TM1637Display display(CLK, DIO);
+
+bool timerRunning = false;
+bool timerFinished = false;
+unsigned long startTime = 0;
+const unsigned long timerDuration = 50000;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+bool lastButtonState = HIGH;
+unsigned long lastBlinkTime = 0;
+const unsigned long blinkInterval = 500;
+
+// Broche pour contrôler l'électroaimant
+#define ELECTROMAGNET_PIN 4
+bool isElectromagnetActivated = false;
+
+void setup() {
+  // Initialisation NeoPixel
+  pixels.begin();
+  pixels.show();
+  setPixelColor(255, 165, 0);
+
+  // Initialisation Serial et SoftwareSerial
+  TRANS_SERIAL.begin(9600); 
+  SERIAL.begin(9600);
+  SERIAL.println("Version : v1.0 - Début du débogage.");
+
+  // Initialisation des LED pour la détection des couleurs
+  strip.begin();
+  strip.show();
+
+  // Initialisation de la broche pour l'électroaimant
+  pinMode(ELECTROMAGNET_PIN, OUTPUT);
+  digitalWrite(ELECTROMAGNET_PIN, HIGH);
+
+  // Initialisation du minuteur
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  display.setBrightness(7);
+  display.showNumberDec(60);
+}
+
+void loop() {
+  // Partie 1 : Code numérique
+  if (!isCodeValid) {
+    checkInput();
+  }
+
+  // Partie 2 : Couleur
+  if (!isColorValid) {
+    checkColor();
+  }
+
+  // Partie 3 : Minuteur
+  manageTimer();
+
+  // Activation de l'électroaimant
+  if (isCodeValid && isColorValid && !isElectromagnetActivated) {
+    activateElectromagnet();
+    delay(10000);
+    releaseElectromagnet();
+    isElectromagnetActivated = true;
+  }
+}
+
+// Activation et relâchement de l'électroaimant
+void activateElectromagnet() {
+  SERIAL.println("Activation de l'électroaimant.");
+  digitalWrite(ELECTROMAGNET_PIN, LOW);
+}
+
+void releaseElectromagnet() {
+  SERIAL.println("Relâchement de l'électroaimant.");
+  digitalWrite(ELECTROMAGNET_PIN, HIGH);
+}
+
+// Gestion du minuteur
+void manageTimer() {
+  bool currentButtonState = digitalRead(BUTTON_PIN);
+
+  // Détection de l'appui sur le bouton
+  if (currentButtonState != lastButtonState) {
+    lastDebounceTime = millis();  // Redémarre le délai de rebond
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (currentButtonState == HIGH) {
+      if (!timerRunning && !timerFinished) {
+        // Démarre le minuteur
+        timerRunning = true;
+        timerFinished = false;
+        startTime = millis();
+      } else if (timerFinished) {
+        // Réinitialise tous les modules lorsque le timer est terminé
+        resetModules();
+        resetCode();
+        isCodeValid = false;
+        isColorValid = false;
+        timerFinished = false;
+      }
+    }
+  }
+
+  lastButtonState = currentButtonState;
+
+  // Si le timer est en marche, mettre à jour l'affichage du temps restant
+  if (timerRunning) {
+    unsigned long elapsed = millis() - startTime;
+    if (elapsed < timerDuration) {
+      int remainingSeconds = (timerDuration - elapsed) / 1000;
+      display.showNumberDec(remainingSeconds, false);
+    } else {
+      // Lorsque le timer est terminé
+      timerRunning = false;
+      timerFinished = true;
+      handleTimerEnd();
+    }
+  }
+}
+
+void handleTimerEnd() {
+  unsigned long currentMillis = millis();
+
+  // Clignotement de la LED en rouge après la fin du timer
+  if (currentMillis - lastBlinkTime >= blinkInterval) {
+    lastBlinkTime = currentMillis;
+    bool isOn = (currentMillis / blinkInterval) % 2 == 0;
+    for (int i = 0; i < NUMPIXELS; i++) {
+      // Clignotement en rouge
+      pixels.setPixelColor(i, isOn ? 255 : 0, 0, 0);  
+      strip.setPixelColor(i, isOn ? 255 : 0, 0, 0);  // RGB: Rouge allumé, autres éteints
+    }
+    pixels.show();
+    strip.show();
+  }
+
+  // Faire sonner le buzzer 3 fois
+  for (int i = 0; i < 3; i++) {
+    tone(BUZZER_PIN, 1000, 500); // Fréquence 1000 Hz pendant 500 ms
+    delay(1000); // Attente de 1000 ms entre chaque son
+  }
+}
+
+// Réinitialiser tous les modules
+void resetModules() {
+  for (int i = 0; i < NUMPIXELS; i++) {
+    strip.setPixelColor(i, 0, 0, 0);  // Éteindre toutes les LEDs
+  }
+  strip.show();
+  pixels.setPixelColor(0, 0, 0, 0);
+  pixels.show();
+  noTone(BUZZER_PIN);  // Éteindre le buzzer
+}
+
+// Détection du code numérique
+void checkInput() {
+  while (TRANS_SERIAL.available()) {
+    uint8_t data = TRANS_SERIAL.read();
+    char digit = mapDataToChar(data);
+
+    if (digit != '\0') {
+      if (digit == '*') {
+        resetCode();
+      } else if (digit == '#') {
+        validateCode();
+      } else {
+        if (enteredCode.length() < 4) {
+          enteredCode += digit;
+        } else {
+          resetCode();
+        }
+      }
+    }
+  }
+}
+
+char mapDataToChar(uint8_t data) {
+  switch (data) {
+    case 0xE1: return '1';
+    case 0xE2: return '2';
+    case 0xE3: return '3';
+    case 0xE4: return '4';
+    case 0xE5: return '5';
+    case 0xE6: return '6';
+    case 0xE7: return '7';
+    case 0xE8: return '8';
+    case 0xE9: return '9';
+    case 0xEA: return '*';
+    case 0xEB: return '0';
+    case 0xEC: return '#';
+    default: return '\0';
+  }
+}
+
+void validateCode() {
+  if (enteredCode == targetCode) {
+    setPixelColor(0, 255, 0);
+    isCodeValid = true;
+  } else {
+    setPixelColor(255, 0, 0);
+    delay(2000);
+    setPixelColor(255, 165, 0);
+  }
+  resetCode();
+}
+
+void resetCode() {
+  enteredCode = "";
+  if (!isCodeValid) {
+    setPixelColor(255, 165, 0);
+  }
+}
+
+void setPixelColor(uint8_t r, uint8_t g, uint8_t b) {
+  pixels.setPixelColor(0, pixels.Color(r, g, b));
+  pixels.show();
+}
+
+// Détection des couleurs
+void checkColor() {
+  int rawPotValue1 = analogRead(POT1_PIN);
+  int rawPotValue2 = analogRead(POT2_PIN);
+  int rawPotValue3 = analogRead(POT3_PIN);
+
+  int red = map(rawPotValue1, 0, 1023, 0, 255);
+  int green = map(rawPotValue2, 0, 1023, 0, 255);
+  int blue = map(rawPotValue3, 0, 1023, 0, 255);
+
+  for (int i = 0; i < NUMPIXELS; i++) {
+    strip.setPixelColor(i, red, green, blue);
+  }
+  strip.show();
+
+  if (red >= targetRedMin && red <= targetRedMax &&
+      green >= targetGreenMin && green <= targetGreenMax &&
+      blue >= targetBlueMin && blue <= targetBlueMax) {
+    isColorValid = true;
+    for (int i = 0; i < 5; i++) {
+      for (int j = 0; j < NUMPIXELS; j++) {
+        strip.setPixelColor(j, 0, 255, 0);
+      }
+      strip.show();
+      delay(500);
+      for (int j = 0; j < NUMPIXELS; j++) {
+        strip.setPixelColor(j, 0, 0, 0);
+      }
+      strip.show();
+      delay(500);
+    }
+  }
+}
