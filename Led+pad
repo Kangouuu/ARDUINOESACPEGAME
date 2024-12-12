@@ -1,0 +1,239 @@
+#include "SoftwareSerial.h"
+#include <Adafruit_NeoPixel.h>
+#include <Arduino.h>
+
+// Première partie : Détection du code numérique
+#if defined(ARDUINO_ARCH_AVR)
+#define SERIAL Serial
+SoftwareSerial mySerial(2, 3);
+#define TRANS_SERIAL mySerial
+
+#elif defined(ARDUINO_ARCH_SAMD)
+#define SERIAL SerialUSB
+#define TRANS_SERIAL Serial
+
+#elif defined(ARDUINO_ARCH_RENESAS)
+#define SERIAL Serial
+SoftwareSerial mySerial(2, 3); // RX=2, TX=3
+#define TRANS_SERIAL mySerial
+
+#else
+#error "Architecture non supportée. Veuillez vérifier votre carte Arduino."
+#endif
+
+// Configuration NeoPixel
+#define NEOPIXEL_PIN 7  // Broche connectée à la LED RGB
+#define NUM_PIXELS 1    // Nombre de LEDs (1 pour une LED RGB)
+Adafruit_NeoPixel pixels(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// Code cible et état
+const String targetCode = "2002"; // Code à trouver
+String enteredCode = "";          // Stocke le code saisi
+bool isCodeValid = false;         // Indique si le code correct a été entré
+
+// Deuxième partie : Détection de la couleur avec les potentiomètres
+#define PIN            6  // Pin pour les LED RGB
+#define NUMPIXELS      8  // Nombre de LED RGB
+#define POT1_PIN       A0 // Premier capteur rotatif (Rouge)
+#define POT2_PIN       A1 // Deuxième capteur rotatif (Vert)
+#define POT3_PIN       A2 // Troisième capteur rotatif (Bleu)
+
+Adafruit_NeoPixel strip(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+// Variables pour les potentiomètres
+int potValue1 = 0;  // Valeur du premier capteur rotatif (Rouge)
+int potValue2 = 0;  // Valeur du deuxième capteur rotatif (Vert)
+int potValue3 = 0;  // Valeur du troisième capteur rotatif (Bleu)
+
+int previousPotValue1 = 0;
+int previousPotValue2 = 0;
+int previousPotValue3 = 0;
+int threshold = 10; // Seuil pour l'hystérésis
+
+// Définir les valeurs cibles pour la couleur rose
+int targetRedMin = 150;  // Valeur minimale pour le rouge
+int targetRedMax = 255;  // Valeur maximale pour le rouge
+int targetGreenMin = 0;  // Valeur minimale pour le vert
+int targetGreenMax = 100; // Augmenter la valeur maximale pour le vert
+int targetBlueMin = 150; // Valeur minimale pour le bleu
+int targetBlueMax = 255; // Valeur maximale pour le bleu
+
+
+bool isColorValid = false; // Indique si la couleur cible a été atteinte
+bool isElectromagnetActivated = false;  // Indique si l'électroaimant a été activé
+
+// Broche pour contrôler l'électroaimant (relais)
+#define ELECTROMAGNET_PIN 5
+
+void setup() {
+  // Initialisation NeoPixel
+  pixels.begin();
+  pixels.show(); // Éteint la LED par défaut
+  setPixelColor(255, 165, 0); // Orange au démarrage
+
+  // Initialisation Serial et SoftwareSerial
+  TRANS_SERIAL.begin(9600); 
+  SERIAL.begin(9600);
+  SERIAL.println("Version : v1.0 - Début du débogage.");
+  SERIAL.println("Connectez le module et saisissez le code.");
+  SERIAL.println("Utilisez '*' pour réinitialiser et '#' pour valider.");
+  SERIAL.println("Le code attendu est : " + targetCode);
+
+  // Initialisation des LED pour la deuxième partie
+  strip.begin();
+  strip.show();  // Initialiser les LED à l'état éteint
+
+  // Initialisation de la broche pour l'électroaimant
+  pinMode(ELECTROMAGNET_PIN, OUTPUT);
+  digitalWrite(ELECTROMAGNET_PIN, HIGH);  // Assurez-vous que l'électroaimant est désactivé au démarrage
+}
+
+void loop() {
+  // Vérifier si le code numérique est valide
+  if (!isCodeValid) {
+    checkInput();  // Vérifie les entrées utilisateur uniquement si le code n'est pas encore validé
+  }
+
+  // Vérifier la couleur avec les potentiomètres
+  checkColor(); // Vérifie la couleur générée par les potentiomètres
+
+  // Si les deux parties sont valides et que l'électroaimant n'a pas encore été activé
+  if (isCodeValid && isColorValid && !isElectromagnetActivated) {
+    activateElectromagnet();  // Active l'électroaimant pour attirer
+    delay(10000);               // Laisse l'électroaimant activé pendant 3 secondes (ajuster selon le besoin)
+    releaseElectromagnet();    // Relâche l'électroaimant après le délai
+    isElectromagnetActivated = true;  // Marque l'électroaimant comme activé
+  }
+}
+
+// Fonction d'activation de l'électroaimant (attirer)
+void activateElectromagnet() {
+  // Ajouter le code pour activer l'électroaimant ici
+  SERIAL.println("Activation de l'électroaimant (attirer).");
+  digitalWrite(ELECTROMAGNET_PIN, LOW);  // Active l'électroaimant (envoyer un signal HIGH au relais)
+}
+
+// Fonction de relâchement de l'électroaimant
+void releaseElectromagnet() {
+  // Ajouter le code pour relâcher l'électroaimant ici
+  SERIAL.println("Relâchement de l'électroaimant.");
+  digitalWrite(ELECTROMAGNET_PIN, HIGH);   // Désactive l'électroaimant (envoyer un signal LOW au relais)
+}
+
+// Première partie : vérification du code numérique
+void checkInput() {
+  while (TRANS_SERIAL.available()) {
+    uint8_t data = TRANS_SERIAL.read();
+    char digit = mapDataToChar(data);
+
+    if (digit != '\0') {
+      SERIAL.print("Caractère reçu : ");
+      SERIAL.println(digit); // Affiche le caractère saisi dans le moniteur série
+
+      if (digit == '*') {
+        resetCode(); // Réinitialise le code si '*' est saisi
+      } else if (digit == '#') {
+        validateCode(); // Valide le code si '#' est saisi
+      } else {
+        if (enteredCode.length() < 4) {
+          enteredCode += digit; // Ajoute le chiffre saisi au code
+          SERIAL.println("Code actuel : " + enteredCode);
+        } else {
+          SERIAL.println("Erreur : Le code dépasse 4 caractères. Réinitialisation nécessaire.");
+          resetCode();
+        }
+      }
+    }
+  }
+}
+
+char mapDataToChar(uint8_t data) {
+  switch (data) {
+    case 0xE1: return '1';
+    case 0xE2: return '2';
+    case 0xE3: return '3';
+    case 0xE4: return '4';
+    case 0xE5: return '5';
+    case 0xE6: return '6';
+    case 0xE7: return '7';
+    case 0xE8: return '8';
+    case 0xE9: return '9';
+    case 0xEA: return '*';
+    case 0xEB: return '0';
+    case 0xEC: return '#';
+    default: return '\0'; // Retourne un caractère nul si non valide
+  }
+}
+
+void validateCode() {
+  SERIAL.println("Validation du code...");
+  if (enteredCode == targetCode) {
+    SERIAL.println("Code correct ! LED verte allumée.");
+    setPixelColor(0, 255, 0); // Vert
+    isCodeValid = true; // Marque le code comme validé
+  } else {
+    SERIAL.println("Code incorrect : " + enteredCode);
+    setPixelColor(255, 0, 0); // Rouge
+    delay(2000);              // Maintient la LED allumée 2 secondes
+    setPixelColor(255, 165, 0); // Retourne à la couleur orange
+  }
+  resetCode(); // Réinitialise le code après validation
+}
+
+void resetCode() {
+  enteredCode = ""; // Efface le code actuel
+  SERIAL.println("Code réinitialisé.");
+  if (!isCodeValid) {
+    setPixelColor(255, 165, 0); // Retourne à l'orange si le code n'est pas validé
+  }
+}
+
+void setPixelColor(uint8_t r, uint8_t g, uint8_t b) {
+  pixels.setPixelColor(0, pixels.Color(r, g, b)); // Définit la couleur RGB
+  pixels.show(); // Met à jour la LED
+}
+
+// Deuxième partie : vérification de la couleur
+void checkColor() {
+  // Si la couleur a déjà été validée, on ne fait rien
+  if (isColorValid) {
+    return; // Sort de la fonction si la couleur est déjà validée
+  }
+
+  int rawPotValue1 = analogRead(POT1_PIN);  // Premier capteur rotatif pour le rouge
+  int rawPotValue2 = analogRead(POT2_PIN);  // Deuxième capteur rotatif pour le vert
+  int rawPotValue3 = analogRead(POT3_PIN);  // Troisième capteur rotatif pour le bleu
+
+  // Mapper les valeurs des capteurs rotatifs (0-1023) vers (0-255) pour chaque couleur
+  int red = map(rawPotValue1, 0, 1023, 0, 255);   // Ajuster le rouge
+  int green = map(rawPotValue2, 0, 1023, 0, 255); // Ajuster le vert
+  int blue = map(rawPotValue3, 0, 1023, 0, 255);  // Ajuster le bleu
+
+  // Mettre à jour les LED RGB avec les nouvelles valeurs de couleur
+  for (int i = 0; i < NUMPIXELS; i++) {
+    strip.setPixelColor(i, red, green, blue);
+  }
+  strip.show();
+
+  // Vérifier si la couleur est proche de la couleur cible (rose)
+  if (red >= targetRedMin && red <= targetRedMax &&
+      green >= targetGreenMin && green <= targetGreenMax &&
+      blue >= targetBlueMin && blue <= targetBlueMax) {
+    isColorValid = true;  // Marque la couleur comme validée
+    SERIAL.println("Couleur rose atteinte.");
+
+    // Clignoter l'anneau de LED en vert
+    for (int i = 0; i < 5; i++) {
+      for (int j = 0; j < NUMPIXELS; j++) {
+        strip.setPixelColor(j, 0, 255, 0); // Vert
+      }
+      strip.show();
+      delay(500); // Attendre 500 ms
+      for (int j = 0; j < NUMPIXELS; j++) {
+        strip.setPixelColor(j, 0, 0, 0); // Éteindre la LED
+      }
+      strip.show();
+      delay(500); // Attendre 500 ms
+    }
+  }
+}
